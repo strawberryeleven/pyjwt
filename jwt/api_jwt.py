@@ -40,13 +40,20 @@ if TYPE_CHECKING or bool(os.getenv("SPHINX_BUILD", "")):
 
 
 class PyJWT:
-    def __init__(self, options: Options | None = None) -> None:
+    def __init__(
+        self,
+        options: Options | None = None,
+        jws: PyJWS | None = None,
+    ) -> None:
         self.options: FullOptions
         self.options = self._get_default_options()
         if options is not None:
             self.options = self._merge_options(options)
 
-        self._jws = PyJWS(options=self._get_sig_options())
+        # An explicit jws lets callers (for example JWTFacade) wire a shared
+        # PyJWS instance from the constructor rather than monkey-patching the
+        # private ``_jws`` attribute after construction.
+        self._jws = jws if jws is not None else PyJWS(options=self._get_sig_options())
 
     @staticmethod
     def _get_default_options() -> FullOptions:
@@ -575,8 +582,7 @@ class PyJWT:
                 ) from None
 
 
-_jwt_global_obj = PyJWT()
-_jwt_global_obj._jws = _jws_global_obj
+_jwt_global_obj = PyJWT(jws=_jws_global_obj)
 encode = _jwt_global_obj.encode
 decode_complete = _jwt_global_obj.decode_complete
 decode = _jwt_global_obj.decode

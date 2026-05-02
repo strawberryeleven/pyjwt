@@ -1,3 +1,4 @@
+from ._facade import JWTFacade
 from .api_jwk import PyJWK, PyJWKSet
 from .api_jws import (
     PyJWS,
@@ -44,6 +45,7 @@ __copyright__ = "Copyright 2015-2026 José Padilla"
 
 
 __all__ = [
+    "JWTFacade",
     "PyJWS",
     "PyJWT",
     "PyJWKClient",
