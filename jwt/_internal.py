@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from typing import Any
 
 from .warnings import RemovedInPyjwt3Warning
@@ -22,3 +23,17 @@ def warn_deprecated_kwargs(function_name: str, kwargs: dict[str, Any]) -> None:
         RemovedInPyjwt3Warning,
         stacklevel=3,
     )
+
+
+@dataclass(frozen=True)
+class DecodedToken:
+    """Immutable result of parsing a JWS into its four constituent pieces.
+
+    Replaces the four-tuple ``(payload, signing_input, header, signature)``
+    that used to be returned from ``PyJWS._load``.
+    """
+
+    payload: bytes
+    signing_input: bytes
+    header: dict[str, Any]
+    signature: bytes

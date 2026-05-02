@@ -6,7 +6,7 @@ import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from ._internal import warn_deprecated_kwargs
+from ._internal import DecodedToken, warn_deprecated_kwargs
 from .algorithms import (
     Algorithm,
     get_default_algorithms,
@@ -252,11 +252,14 @@ class PyJWS:
                 'It is required that you pass in a value for the "algorithms" argument when calling decode().'
             )
 
-        payload, signing_input, header, signature = self._load(jwt)
+        decoded = self._load(jwt)
 
-        self._validate_headers(header)
+        self._validate_headers(decoded.header)
 
-        if header.get("b64", True) is False:
+        payload = decoded.payload
+        signing_input = decoded.signing_input
+
+        if decoded.header.get("b64", True) is False:
             if detached_payload is None:
                 raise DecodeError(
                     'It is required that you pass in a value for the "detached_payload" argument to decode a message having the b64 header set to false.'
@@ -265,12 +268,14 @@ class PyJWS:
             signing_input = b".".join([signing_input.rsplit(b".", 1)[0], payload])
 
         if verify_signature:
-            self._verify_signature(signing_input, header, signature, key, algorithms)
+            self._verify_signature(
+                signing_input, decoded.header, decoded.signature, key, algorithms
+            )
 
         return {
             "payload": payload,
-            "header": header,
-            "signature": signature,
+            "header": decoded.header,
+            "signature": decoded.signature,
         }
 
     def decode(
@@ -294,12 +299,12 @@ class PyJWS:
         Note: The signature is not verified so the header parameters
         should not be fully trusted until signature verification is complete
         """
-        headers = self._load(jwt)[2]
+        headers = self._load(jwt).header
         self._validate_headers(headers)
 
         return headers
 
-    def _load(self, jwt: str | bytes) -> tuple[bytes, bytes, dict[str, Any], bytes]:
+    def _load(self, jwt: str | bytes) -> DecodedToken:
         if isinstance(jwt, str):
             jwt = jwt.encode("utf-8")
 
@@ -335,7 +340,12 @@ class PyJWS:
         except (TypeError, binascii.Error) as err:
             raise DecodeError("Invalid crypto padding") from err
 
-        return (payload, signing_input, header, signature)
+        return DecodedToken(
+            payload=payload,
+            signing_input=signing_input,
+            header=header,
+            signature=signature,
+        )
 
     def _verify_signature(
         self,
