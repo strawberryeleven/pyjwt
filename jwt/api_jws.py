@@ -128,34 +128,82 @@ class PyJWS:
         is_payload_detached: bool = False,
         sort_headers: bool = True,
     ) -> str:
-        segments: list[bytes] = []
+        algorithm_ = self._resolve_algorithm(algorithm, headers, key)
+        is_payload_detached = self._resolve_payload_detachment(
+            headers, is_payload_detached
+        )
 
-        # declare a new var to narrow the type for type checkers
+        header = self._build_header(algorithm_, headers, is_payload_detached)
+
+        json_header = json.dumps(
+            header, separators=(",", ":"), cls=json_encoder, sort_keys=sort_headers
+        ).encode()
+        header_segment = base64url_encode(json_header)
+        payload_segment = (
+            payload if is_payload_detached else base64url_encode(payload)
+        )
+        signing_input = b".".join([header_segment, payload_segment])
+
+        alg_obj = self.get_algorithm_by_name(algorithm_)
+        if isinstance(key, PyJWK):
+            key = key.key
+        key = alg_obj.prepare_key(key)
+
+        self._enforce_key_length(alg_obj, key)
+
+        signature = alg_obj.sign(signing_input, key)
+        signature_segment = base64url_encode(signature)
+
+        # Detached payloads are emitted with an empty middle segment.
+        final_payload = b"" if is_payload_detached else payload_segment
+        return b".".join(
+            [header_segment, final_payload, signature_segment]
+        ).decode("utf-8")
+
+    @staticmethod
+    def _resolve_algorithm(
+        algorithm: Any,
+        headers: dict[str, Any] | None,
+        key: Any,
+    ) -> str:
+        """Resolve the algorithm name from four possible sources, in priority order:
+        explicit ``headers["alg"]`` (highest), explicit ``algorithm`` parameter,
+        ``key.algorithm_name`` if ``key`` is a :class:`PyJWK`, fixed default."""
         if algorithm is _ALGORITHM_UNSET:
-            if isinstance(key, PyJWK):
-                algorithm_ = key.algorithm_name
-            else:
-                algorithm_ = "HS256"
+            algorithm_name = (
+                key.algorithm_name if isinstance(key, PyJWK) else "HS256"
+            )
         elif algorithm is None:
-            if isinstance(key, PyJWK):
-                algorithm_ = key.algorithm_name
-            else:
-                algorithm_ = "none"
+            algorithm_name = (
+                key.algorithm_name if isinstance(key, PyJWK) else "none"
+            )
         else:
-            algorithm_ = algorithm
+            algorithm_name = algorithm
 
-        # Prefer headers values if present to function parameters.
         if headers:
-            headers_alg = headers.get("alg")
-            if headers_alg:
-                algorithm_ = headers["alg"]
+            header_alg = headers.get("alg")
+            if header_alg:
+                algorithm_name = header_alg
 
-            headers_b64 = headers.get("b64")
-            if headers_b64 is False:
-                is_payload_detached = True
+        return algorithm_name
 
-        # Header
-        header: dict[str, Any] = {"typ": self.header_typ, "alg": algorithm_}
+    @staticmethod
+    def _resolve_payload_detachment(
+        headers: dict[str, Any] | None, is_payload_detached: bool
+    ) -> bool:
+        """``b64: false`` in the headers implies a detached payload."""
+        if headers and headers.get("b64") is False:
+            return True
+        return is_payload_detached
+
+    def _build_header(
+        self,
+        algorithm_name: str,
+        headers: dict[str, Any] | None,
+        is_payload_detached: bool,
+    ) -> dict[str, Any]:
+        """Construct the JOSE header dict, applying user-supplied overrides and the detachment flag."""
+        header: dict[str, Any] = {"typ": self.header_typ, "alg": algorithm_name}
 
         if headers:
             self._validate_headers(headers, encoding=True)
@@ -170,43 +218,16 @@ class PyJWS:
             # True is the standard value for b64, so no need for it
             del header["b64"]
 
-        json_header = json.dumps(
-            header, separators=(",", ":"), cls=json_encoder, sort_keys=sort_headers
-        ).encode()
+        return header
 
-        segments.append(base64url_encode(json_header))
-
-        if is_payload_detached:
-            msg_payload = payload
-        else:
-            msg_payload = base64url_encode(payload)
-        segments.append(msg_payload)
-
-        # Segments
-        signing_input = b".".join(segments)
-
-        alg_obj = self.get_algorithm_by_name(algorithm_)
-        if isinstance(key, PyJWK):
-            key = key.key
-        key = alg_obj.prepare_key(key)
-
+    def _enforce_key_length(self, alg_obj: Algorithm, key: Any) -> None:
+        """Raise (when ``enforce_minimum_key_length`` is set) or warn when the key is short."""
         key_length_msg = alg_obj.check_key_length(key)
-        if key_length_msg:
-            if self.options.get("enforce_minimum_key_length", False):
-                raise InvalidKeyError(key_length_msg)
-            else:
-                warnings.warn(key_length_msg, InsecureKeyLengthWarning, stacklevel=2)
-
-        signature = alg_obj.sign(signing_input, key)
-
-        segments.append(base64url_encode(signature))
-
-        # Don't put the payload content inside the encoded token when detached
-        if is_payload_detached:
-            segments[1] = b""
-        encoded_string = b".".join(segments)
-
-        return encoded_string.decode("utf-8")
+        if not key_length_msg:
+            return
+        if self.options.get("enforce_minimum_key_length", False):
+            raise InvalidKeyError(key_length_msg)
+        warnings.warn(key_length_msg, InsecureKeyLengthWarning, stacklevel=3)
 
     def decode_complete(
         self,
