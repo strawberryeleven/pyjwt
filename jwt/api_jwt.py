@@ -501,11 +501,8 @@ class PyJWT:
         strict: bool = False,
     ) -> None:
         if audience is None:
-            if "aud" not in payload or not payload["aud"]:
-                return
-            # Application did not specify an audience, but
-            # the token has the 'aud' claim
-            raise InvalidAudienceError("Invalid audience")
+            self._reject_unexpected_aud(payload)
+            return
 
         if "aud" not in payload or not payload["aud"]:
             # Application specified an audience, but it could not be
@@ -514,22 +511,34 @@ class PyJWT:
 
         audience_claims = payload["aud"]
 
-        # In strict mode, we forbid list matching: the supplied audience
-        # must be a string, and it must exactly match the audience claim.
         if strict:
-            # Only a single audience is allowed in strict mode.
-            if not isinstance(audience, str):
-                raise InvalidAudienceError("Invalid audience (strict)")
+            self._validate_aud_strict(audience, audience_claims)
+        else:
+            self._validate_aud_loose(audience, audience_claims)
 
-            # Only a single audience claim is allowed in strict mode.
-            if not isinstance(audience_claims, str):
-                raise InvalidAudienceError("Invalid claim format in token (strict)")
+    @staticmethod
+    def _reject_unexpected_aud(payload: dict[str, Any]) -> None:
+        """Raise if the token carries an ``aud`` claim but the application did not supply an audience."""
+        if "aud" in payload and payload["aud"]:
+            raise InvalidAudienceError("Invalid audience")
 
-            if audience != audience_claims:
-                raise InvalidAudienceError("Audience doesn't match (strict)")
+    @staticmethod
+    def _validate_aud_strict(
+        audience: str | Iterable[str], audience_claims: Any
+    ) -> None:
+        """Strict mode: a single-string audience must exactly equal a single-string ``aud`` claim."""
+        if not isinstance(audience, str):
+            raise InvalidAudienceError("Invalid audience (strict)")
+        if not isinstance(audience_claims, str):
+            raise InvalidAudienceError("Invalid claim format in token (strict)")
+        if audience != audience_claims:
+            raise InvalidAudienceError("Audience doesn't match (strict)")
 
-            return
-
+    @staticmethod
+    def _validate_aud_loose(
+        audience: str | Iterable[str], audience_claims: Any
+    ) -> None:
+        """Loose mode: audience and ``aud`` claim may each be a string or list; any overlap is sufficient."""
         if isinstance(audience_claims, str):
             audience_claims = [audience_claims]
         if not isinstance(audience_claims, list):
