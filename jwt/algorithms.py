@@ -247,18 +247,51 @@ class Algorithm(ABC):
         the key value in the proper format for sign() and verify().
         """
 
-    @abstractmethod
     def sign(self, msg: bytes, key: Any) -> bytes:
+        """Template Method: prepare input -> compute signature -> finalise output.
+
+        Subclasses normally only override :meth:`_compute_signature`. The
+        ``_prepare_input`` and ``_finalise_signature`` hooks default to
+        pass-through; only algorithms whose signature representation differs
+        from the cryptography library's native form (such as ECDSA's
+        DER -> raw R||S conversion) need to override them.
         """
-        Returns a digital signature for the specified message
-        using the specified key value.
-        """
+        prepared = self._prepare_input(msg, key)
+        raw = self._compute_signature(prepared, key)
+        return self._finalise_signature(raw, key)
+
+    def _prepare_input(self, msg: bytes, key: Any) -> bytes:
+        """Hook called before :meth:`_compute_signature`. Default: pass-through."""
+        return msg
 
     @abstractmethod
+    def _compute_signature(self, msg: bytes, key: Any) -> bytes:
+        """Algorithm-specific signature computation."""
+
+    def _finalise_signature(self, sig: bytes, key: Any) -> bytes:
+        """Hook called after :meth:`_compute_signature`. Default: pass-through."""
+        return sig
+
     def verify(self, msg: bytes, key: Any, sig: bytes) -> bool:
+        """Template Method: call :meth:`_do_verify`; treat the exceptions in
+        :attr:`_verify_failure_exceptions` as "invalid signature" -> ``False``.
+
+        Other exceptions propagate.
         """
-        Verifies that the specified digital signature is valid
-        for the specified message and key values.
+        try:
+            return self._do_verify(msg, key, sig)
+        except self._verify_failure_exceptions:
+            return False
+
+    _verify_failure_exceptions: ClassVar[tuple[type[Exception], ...]] = ()
+
+    @abstractmethod
+    def _do_verify(self, msg: bytes, key: Any, sig: bytes) -> bool:
+        """Algorithm-specific verification.
+
+        Return ``True`` for a valid signature; either return ``False`` or
+        raise one of the algorithm's :attr:`_verify_failure_exceptions` for
+        an invalid one.
         """
 
     @overload
@@ -310,10 +343,10 @@ class NoneAlgorithm(Algorithm):
 
         return key
 
-    def sign(self, msg: bytes, key: None) -> bytes:
+    def _compute_signature(self, msg: bytes, key: None) -> bytes:
         return b""
 
-    def verify(self, msg: bytes, key: None, sig: bytes) -> bool:
+    def _do_verify(self, msg: bytes, key: None, sig: bytes) -> bool:
         return False
 
     @staticmethod
@@ -397,10 +430,10 @@ class HMACAlgorithm(Algorithm):
             )
         return None
 
-    def sign(self, msg: bytes, key: bytes) -> bytes:
+    def _compute_signature(self, msg: bytes, key: bytes) -> bytes:
         return hmac.new(key, msg, self.hash_alg).digest()
 
-    def verify(self, msg: bytes, key: bytes, sig: bytes) -> bool:
+    def _do_verify(self, msg: bytes, key: bytes, sig: bytes) -> bool:
         return hmac.compare_digest(sig, self.sign(msg, key))
 
 
@@ -578,16 +611,15 @@ if has_crypto:
                 public_numbers=public_numbers,
             )
 
-        def sign(self, msg: bytes, key: RSAPrivateKey) -> bytes:
+        _verify_failure_exceptions = (InvalidSignature,)
+
+        def _compute_signature(self, msg: bytes, key: RSAPrivateKey) -> bytes:
             signature: bytes = key.sign(msg, padding.PKCS1v15(), self.hash_alg())
             return signature
 
-        def verify(self, msg: bytes, key: RSAPublicKey, sig: bytes) -> bool:
-            try:
-                key.verify(sig, msg, padding.PKCS1v15(), self.hash_alg())
-                return True
-            except InvalidSignature:
-                return False
+        def _do_verify(self, msg: bytes, key: RSAPublicKey, sig: bytes) -> bool:
+            key.verify(sig, msg, padding.PKCS1v15(), self.hash_alg())
+            return True
 
     class ECAlgorithm(Algorithm):
         """
@@ -655,27 +687,26 @@ if has_crypto:
                 self._validate_curve(ec_private_key)
                 return ec_private_key
 
-        def sign(self, msg: bytes, key: EllipticCurvePrivateKey) -> bytes:
-            der_sig = key.sign(msg, ECDSA(self.hash_alg()))
+        _verify_failure_exceptions = (InvalidSignature, ValueError)
 
-            return der_to_raw_signature(der_sig, key.curve)
+        def _compute_signature(
+            self, msg: bytes, key: EllipticCurvePrivateKey
+        ) -> bytes:
+            return key.sign(msg, ECDSA(self.hash_alg()))
 
-        def verify(self, msg: bytes, key: AllowedECKeys, sig: bytes) -> bool:
-            try:
-                der_sig = raw_to_der_signature(sig, key.curve)
-            except ValueError:
-                return False
+        def _finalise_signature(self, sig: bytes, key: Any) -> bytes:
+            """Convert the cryptography library's DER signature to JWS-style raw R||S."""
+            return der_to_raw_signature(sig, key.curve)
 
-            try:
-                public_key = (
-                    key.public_key()
-                    if isinstance(key, EllipticCurvePrivateKey)
-                    else key
-                )
-                public_key.verify(der_sig, msg, ECDSA(self.hash_alg()))
-                return True
-            except InvalidSignature:
-                return False
+        def _do_verify(self, msg: bytes, key: AllowedECKeys, sig: bytes) -> bool:
+            der_sig = raw_to_der_signature(sig, key.curve)
+            public_key = (
+                key.public_key()
+                if isinstance(key, EllipticCurvePrivateKey)
+                else key
+            )
+            public_key.verify(der_sig, msg, ECDSA(self.hash_alg()))
+            return True
 
         @overload
         @staticmethod
@@ -809,7 +840,7 @@ if has_crypto:
         Performs a signature using RSASSA-PSS with MGF1
         """
 
-        def sign(self, msg: bytes, key: RSAPrivateKey) -> bytes:
+        def _compute_signature(self, msg: bytes, key: RSAPrivateKey) -> bytes:
             signature: bytes = key.sign(
                 msg,
                 padding.PSS(
@@ -820,20 +851,17 @@ if has_crypto:
             )
             return signature
 
-        def verify(self, msg: bytes, key: RSAPublicKey, sig: bytes) -> bool:
-            try:
-                key.verify(
-                    sig,
-                    msg,
-                    padding.PSS(
-                        mgf=padding.MGF1(self.hash_alg()),
-                        salt_length=self.hash_alg().digest_size,
-                    ),
-                    self.hash_alg(),
-                )
-                return True
-            except InvalidSignature:
-                return False
+        def _do_verify(self, msg: bytes, key: RSAPublicKey, sig: bytes) -> bool:
+            key.verify(
+                sig,
+                msg,
+                padding.PSS(
+                    mgf=padding.MGF1(self.hash_alg()),
+                    salt_length=self.hash_alg().digest_size,
+                ),
+                self.hash_alg(),
+            )
+            return True
 
     class OKPAlgorithm(Algorithm):
         """
@@ -879,45 +907,30 @@ if has_crypto:
             self.check_crypto_key_type(loaded_key)
             return cast("AllowedOKPKeys", loaded_key)
 
-        def sign(
-            self, msg: str | bytes, key: Ed25519PrivateKey | Ed448PrivateKey
+        _verify_failure_exceptions = (InvalidSignature,)
+
+        def _compute_signature(
+            self, msg: bytes, key: Ed25519PrivateKey | Ed448PrivateKey
         ) -> bytes:
-            """
-            Sign a message ``msg`` using the EdDSA private key ``key``
-            :param str|bytes msg: Message to sign
-            :param Ed25519PrivateKey}Ed448PrivateKey key: A :class:`.Ed25519PrivateKey`
-                or :class:`.Ed448PrivateKey` isinstance
-            :return bytes signature: The signature, as bytes
-            """
+            """Sign a message using an EdDSA private key."""
             msg_bytes = msg.encode("utf-8") if isinstance(msg, str) else msg
             signature: bytes = key.sign(msg_bytes)
             return signature
 
-        def verify(
-            self, msg: str | bytes, key: AllowedOKPKeys, sig: str | bytes
+        def _do_verify(
+            self, msg: bytes, key: AllowedOKPKeys, sig: bytes
         ) -> bool:
-            """
-            Verify a given ``msg`` against a signature ``sig`` using the EdDSA key ``key``
+            """Verify an EdDSA signature; raise :class:`InvalidSignature` on failure."""
+            msg_bytes = msg.encode("utf-8") if isinstance(msg, str) else msg
+            sig_bytes = sig.encode("utf-8") if isinstance(sig, str) else sig
 
-            :param str|bytes sig: EdDSA signature to check ``msg`` against
-            :param str|bytes msg: Message to sign
-            :param Ed25519PrivateKey|Ed25519PublicKey|Ed448PrivateKey|Ed448PublicKey key:
-                A private or public EdDSA key instance
-            :return bool verified: True if signature is valid, False if not.
-            """
-            try:
-                msg_bytes = msg.encode("utf-8") if isinstance(msg, str) else msg
-                sig_bytes = sig.encode("utf-8") if isinstance(sig, str) else sig
-
-                public_key = (
-                    key.public_key()
-                    if isinstance(key, (Ed25519PrivateKey, Ed448PrivateKey))
-                    else key
-                )
-                public_key.verify(sig_bytes, msg_bytes)
-                return True  # If no exception was raised, the signature is valid.
-            except InvalidSignature:
-                return False
+            public_key = (
+                key.public_key()
+                if isinstance(key, (Ed25519PrivateKey, Ed448PrivateKey))
+                else key
+            )
+            public_key.verify(sig_bytes, msg_bytes)
+            return True
 
         @overload
         @staticmethod
