@@ -8,6 +8,7 @@ from collections.abc import Container, Iterable, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Union, cast
 
+from ._internal import warn_deprecated_kwargs
 from .api_jws import PyJWS, _ALGORITHM_UNSET, _jws_global_obj
 from .exceptions import (
     DecodeError,
@@ -20,7 +21,6 @@ from .exceptions import (
     InvalidSubjectError,
     MissingRequiredClaimError,
 )
-from .warnings import RemovedInPyjwt3Warning
 
 if TYPE_CHECKING or bool(os.getenv("SPHINX_BUILD", "")):
     import sys
@@ -228,14 +228,7 @@ class PyJWT:
         :returns: Decoded JWT with the JOSE Header on the key ``header``, the JWS
          Payload on the key ``payload``, and the JWS Signature on the key ``signature``.
         """
-        if kwargs:
-            warnings.warn(
-                "passing additional kwargs to decode_complete() is deprecated "
-                "and will be removed in pyjwt version 3. "
-                f"Unsupported kwargs: {tuple(kwargs.keys())}",
-                RemovedInPyjwt3Warning,
-                stacklevel=2,
-            )
+        warn_deprecated_kwargs("decode_complete", kwargs)
 
         if options is None:
             verify_signature = True
@@ -354,14 +347,7 @@ class PyJWT:
         :rtype: dict[str, typing.Any]
         :returns: the JWT claims
         """
-        if kwargs:
-            warnings.warn(
-                "passing additional kwargs to decode() is deprecated "
-                "and will be removed in pyjwt version 3. "
-                f"Unsupported kwargs: {tuple(kwargs.keys())}",
-                RemovedInPyjwt3Warning,
-                stacklevel=2,
-            )
+        warn_deprecated_kwargs("decode", kwargs)
         decoded = self.decode_complete(
             jwt,
             key,

@@ -6,6 +6,7 @@ import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from ._internal import warn_deprecated_kwargs
 from .algorithms import (
     Algorithm,
     get_default_algorithms,
@@ -21,7 +22,7 @@ from .exceptions import (
     InvalidTokenError,
 )
 from .utils import base64url_decode, base64url_encode
-from .warnings import InsecureKeyLengthWarning, RemovedInPyjwt3Warning
+from .warnings import InsecureKeyLengthWarning
 
 if TYPE_CHECKING:
     from .algorithms import AllowedPrivateKeys, AllowedPublicKeys
@@ -216,14 +217,7 @@ class PyJWS:
         detached_payload: bytes | None = None,
         **kwargs: dict[str, Any],
     ) -> dict[str, Any]:
-        if kwargs:
-            warnings.warn(
-                "passing additional kwargs to decode_complete() is deprecated "
-                "and will be removed in pyjwt version 3. "
-                f"Unsupported kwargs: {tuple(kwargs.keys())}",
-                RemovedInPyjwt3Warning,
-                stacklevel=2,
-            )
+        warn_deprecated_kwargs("decode_complete", kwargs)
         merged_options: SigOptions
         if options is None:
             merged_options = self.options
@@ -267,14 +261,7 @@ class PyJWS:
         detached_payload: bytes | None = None,
         **kwargs: dict[str, Any],
     ) -> Any:
-        if kwargs:
-            warnings.warn(
-                "passing additional kwargs to decode() is deprecated "
-                "and will be removed in pyjwt version 3. "
-                f"Unsupported kwargs: {tuple(kwargs.keys())}",
-                RemovedInPyjwt3Warning,
-                stacklevel=2,
-            )
+        warn_deprecated_kwargs("decode", kwargs)
         decoded = self.decode_complete(
             jwt, key, algorithms, options, detached_payload=detached_payload
         )
