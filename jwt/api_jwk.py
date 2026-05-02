@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from .algorithms import get_default_algorithms, has_crypto, requires_cryptography
+from .algorithms._names import EDDSA, ES256, ES256K, ES384, ES512, HS256, RS256
 from .exceptions import (
     InvalidKeyError,
     MissingCryptographyError,
@@ -32,16 +33,16 @@ class KeyTypeResolver(ABC):
 
 class _ECKeyTypeResolver(KeyTypeResolver):
     _CURVE_TO_ALG = {
-        "P-256": "ES256",
-        "P-384": "ES384",
-        "P-521": "ES512",
-        "secp256k1": "ES256K",
+        "P-256": ES256,
+        "P-384": ES384,
+        "P-521": ES512,
+        "secp256k1": ES256K,
     }
 
     def resolve(self, jwk_data: JWKDict) -> str:
         crv = jwk_data.get("crv", None)
         if not crv:
-            return "ES256"
+            return ES256
         try:
             return self._CURVE_TO_ALG[crv]
         except KeyError:
@@ -50,17 +51,17 @@ class _ECKeyTypeResolver(KeyTypeResolver):
 
 class _RSAKeyTypeResolver(KeyTypeResolver):
     def resolve(self, jwk_data: JWKDict) -> str:
-        return "RS256"
+        return RS256
 
 
 class _OctKeyTypeResolver(KeyTypeResolver):
     def resolve(self, jwk_data: JWKDict) -> str:
-        return "HS256"
+        return HS256
 
 
 class _OKPKeyTypeResolver(KeyTypeResolver):
     _CURVE_TO_ALG = {
-        "Ed25519": "EdDSA",
+        "Ed25519": EDDSA,
     }
 
     def resolve(self, jwk_data: JWKDict) -> str:

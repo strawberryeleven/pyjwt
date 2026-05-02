@@ -13,6 +13,7 @@ from .algorithms import (
     has_crypto,
     requires_cryptography,
 )
+from .algorithms._names import HS256, NONE
 from .api_jwk import PyJWK
 from .exceptions import (
     DecodeError,
@@ -172,11 +173,11 @@ class PyJWS:
         ``key.algorithm_name`` if ``key`` is a :class:`PyJWK`, fixed default."""
         if algorithm is _ALGORITHM_UNSET:
             algorithm_name = (
-                key.algorithm_name if isinstance(key, PyJWK) else "HS256"
+                key.algorithm_name if isinstance(key, PyJWK) else HS256
             )
         elif algorithm is None:
             algorithm_name = (
-                key.algorithm_name if isinstance(key, PyJWK) else "none"
+                key.algorithm_name if isinstance(key, PyJWK) else NONE
             )
         else:
             algorithm_name = algorithm
