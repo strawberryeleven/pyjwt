@@ -137,6 +137,22 @@ requires_cryptography = {
 }
 
 
+def _parse_jwk(jwk: str | JWKDict) -> JWKDict:
+    """Parse a JWK input that may be a JSON string or already a dict.
+
+    Centralises the str/dict/JSON-loads handling that used to be duplicated
+    at the top of every concrete ``Algorithm.from_jwk`` implementation.
+    """
+    try:
+        if isinstance(jwk, str):
+            return json.loads(jwk)
+        if isinstance(jwk, dict):
+            return jwk
+        raise ValueError
+    except ValueError:
+        raise InvalidKeyError("Key is not valid JSON") from None
+
+
 def get_default_algorithms() -> dict[str, Algorithm]:
     """
     Returns the algorithms that are implemented by the library.
@@ -497,75 +513,70 @@ if has_crypto:
 
         @staticmethod
         def from_jwk(jwk: str | JWKDict) -> AllowedRSAKeys:
-            try:
-                if isinstance(jwk, str):
-                    obj = json.loads(jwk)
-                elif isinstance(jwk, dict):
-                    obj = jwk
-                else:
-                    raise ValueError
-            except ValueError:
-                raise InvalidKeyError("Key is not valid JSON") from None
+            obj = _parse_jwk(jwk)
 
             if obj.get("kty") != "RSA":
                 raise InvalidKeyError("Not an RSA key") from None
 
             if "d" in obj and "e" in obj and "n" in obj:
-                # Private key
-                if "oth" in obj:
-                    raise InvalidKeyError(
-                        "Unsupported RSA private key: > 2 primes not supported"
-                    )
+                public_numbers = RSAAlgorithm._rsa_public_numbers(obj)
+                return RSAAlgorithm._rsa_private_numbers(
+                    obj, public_numbers
+                ).private_key()
+            if "n" in obj and "e" in obj:
+                return RSAAlgorithm._rsa_public_numbers(obj).public_key()
+            raise InvalidKeyError("Not a public or private key")
 
-                other_props = ["p", "q", "dp", "dq", "qi"]
-                props_found = [prop in obj for prop in other_props]
-                any_props_found = any(props_found)
+        @staticmethod
+        def _rsa_public_numbers(obj: JWKDict) -> RSAPublicNumbers:
+            """Decode the public RSA components (n, e) from the JWK."""
+            return RSAPublicNumbers(
+                from_base64url_uint(obj["e"]),
+                from_base64url_uint(obj["n"]),
+            )
 
-                if any_props_found and not all(props_found):
-                    raise InvalidKeyError(
-                        "RSA key must include all parameters if any are present besides d"
-                    ) from None
-
-                public_numbers = RSAPublicNumbers(
-                    from_base64url_uint(obj["e"]),
-                    from_base64url_uint(obj["n"]),
+        @staticmethod
+        def _rsa_private_numbers(
+            obj: JWKDict, public_numbers: RSAPublicNumbers
+        ) -> RSAPrivateNumbers:
+            """Decode the private RSA components from the JWK, recovering CRT
+            factors when not all are supplied."""
+            if "oth" in obj:
+                raise InvalidKeyError(
+                    "Unsupported RSA private key: > 2 primes not supported"
                 )
 
-                if any_props_found:
-                    numbers = RSAPrivateNumbers(
-                        d=from_base64url_uint(obj["d"]),
-                        p=from_base64url_uint(obj["p"]),
-                        q=from_base64url_uint(obj["q"]),
-                        dmp1=from_base64url_uint(obj["dp"]),
-                        dmq1=from_base64url_uint(obj["dq"]),
-                        iqmp=from_base64url_uint(obj["qi"]),
-                        public_numbers=public_numbers,
-                    )
-                else:
-                    d = from_base64url_uint(obj["d"])
-                    p, q = rsa_recover_prime_factors(
-                        public_numbers.n, d, public_numbers.e
-                    )
+            crt_props = ["p", "q", "dp", "dq", "qi"]
+            crt_found = [prop in obj for prop in crt_props]
+            any_crt = any(crt_found)
 
-                    numbers = RSAPrivateNumbers(
-                        d=d,
-                        p=p,
-                        q=q,
-                        dmp1=rsa_crt_dmp1(d, p),
-                        dmq1=rsa_crt_dmq1(d, q),
-                        iqmp=rsa_crt_iqmp(p, q),
-                        public_numbers=public_numbers,
-                    )
+            if any_crt and not all(crt_found):
+                raise InvalidKeyError(
+                    "RSA key must include all parameters if any are present besides d"
+                ) from None
 
-                return numbers.private_key()
-            elif "n" in obj and "e" in obj:
-                # Public key
-                return RSAPublicNumbers(
-                    from_base64url_uint(obj["e"]),
-                    from_base64url_uint(obj["n"]),
-                ).public_key()
-            else:
-                raise InvalidKeyError("Not a public or private key")
+            if any_crt:
+                return RSAPrivateNumbers(
+                    d=from_base64url_uint(obj["d"]),
+                    p=from_base64url_uint(obj["p"]),
+                    q=from_base64url_uint(obj["q"]),
+                    dmp1=from_base64url_uint(obj["dp"]),
+                    dmq1=from_base64url_uint(obj["dq"]),
+                    iqmp=from_base64url_uint(obj["qi"]),
+                    public_numbers=public_numbers,
+                )
+
+            d = from_base64url_uint(obj["d"])
+            p, q = rsa_recover_prime_factors(public_numbers.n, d, public_numbers.e)
+            return RSAPrivateNumbers(
+                d=d,
+                p=p,
+                q=q,
+                dmp1=rsa_crt_dmp1(d, p),
+                dmq1=rsa_crt_dmq1(d, q),
+                iqmp=rsa_crt_iqmp(p, q),
+                public_numbers=public_numbers,
+            )
 
         def sign(self, msg: bytes, key: RSAPrivateKey) -> bytes:
             signature: bytes = key.sign(msg, padding.PKCS1v15(), self.hash_alg())
@@ -720,15 +731,7 @@ if has_crypto:
 
         @staticmethod
         def from_jwk(jwk: str | JWKDict) -> AllowedECKeys:
-            try:
-                if isinstance(jwk, str):
-                    obj = json.loads(jwk)
-                elif isinstance(jwk, dict):
-                    obj = jwk
-                else:
-                    raise ValueError
-            except ValueError:
-                raise InvalidKeyError("Key is not valid JSON") from None
+            obj = _parse_jwk(jwk)
 
             if obj.get("kty") != "EC":
                 raise InvalidKeyError("Not an Elliptic curve key") from None
@@ -738,41 +741,9 @@ if has_crypto:
 
             x = base64url_decode(obj.get("x"))
             y = base64url_decode(obj.get("y"))
-
             curve = obj.get("crv")
-            curve_obj: EllipticCurve
 
-            if curve == "P-256":
-                if len(x) == len(y) == 32:
-                    curve_obj = SECP256R1()
-                else:
-                    raise InvalidKeyError(
-                        "Coords should be 32 bytes for curve P-256"
-                    ) from None
-            elif curve == "P-384":
-                if len(x) == len(y) == 48:
-                    curve_obj = SECP384R1()
-                else:
-                    raise InvalidKeyError(
-                        "Coords should be 48 bytes for curve P-384"
-                    ) from None
-            elif curve == "P-521":
-                if len(x) == len(y) == 66:
-                    curve_obj = SECP521R1()
-                else:
-                    raise InvalidKeyError(
-                        "Coords should be 66 bytes for curve P-521"
-                    ) from None
-            elif curve == "secp256k1":
-                if len(x) == len(y) == 32:
-                    curve_obj = SECP256K1()
-                else:
-                    raise InvalidKeyError(
-                        "Coords should be 32 bytes for curve secp256k1"
-                    )
-            else:
-                raise InvalidKeyError(f"Invalid curve: {curve}")
-
+            curve_obj = ECAlgorithm._ec_resolve_curve(curve, x, y)
             public_numbers = EllipticCurvePublicNumbers(
                 x=int.from_bytes(x, byteorder="big"),
                 y=int.from_bytes(y, byteorder="big"),
@@ -782,12 +753,53 @@ if has_crypto:
             if "d" not in obj:
                 return public_numbers.public_key()
 
+            return ECAlgorithm._ec_private_key(obj, public_numbers, x, curve)
+
+        @staticmethod
+        def _ec_resolve_curve(
+            curve: str, x: bytes, y: bytes
+        ) -> EllipticCurve:
+            """Map the JWK ``crv`` field to the matching cryptography curve,
+            validating that the coordinates have the expected length."""
+            if curve == "P-256":
+                if len(x) == len(y) == 32:
+                    return SECP256R1()
+                raise InvalidKeyError(
+                    "Coords should be 32 bytes for curve P-256"
+                ) from None
+            if curve == "P-384":
+                if len(x) == len(y) == 48:
+                    return SECP384R1()
+                raise InvalidKeyError(
+                    "Coords should be 48 bytes for curve P-384"
+                ) from None
+            if curve == "P-521":
+                if len(x) == len(y) == 66:
+                    return SECP521R1()
+                raise InvalidKeyError(
+                    "Coords should be 66 bytes for curve P-521"
+                ) from None
+            if curve == "secp256k1":
+                if len(x) == len(y) == 32:
+                    return SECP256K1()
+                raise InvalidKeyError(
+                    "Coords should be 32 bytes for curve secp256k1"
+                )
+            raise InvalidKeyError(f"Invalid curve: {curve}")
+
+        @staticmethod
+        def _ec_private_key(
+            obj: JWKDict,
+            public_numbers: EllipticCurvePublicNumbers,
+            x: bytes,
+            curve: str,
+        ) -> EllipticCurvePrivateKey:
+            """Decode the private ``d`` component from the JWK and assemble the private key."""
             d = base64url_decode(obj.get("d"))
             if len(d) != len(x):
                 raise InvalidKeyError(
                     "D should be {} bytes for curve {}", len(x), curve
                 )
-
             return EllipticCurvePrivateNumbers(
                 int.from_bytes(d, byteorder="big"), public_numbers
             ).private_key()
@@ -964,27 +976,24 @@ if has_crypto:
 
         @staticmethod
         def from_jwk(jwk: str | JWKDict) -> AllowedOKPKeys:
-            try:
-                if isinstance(jwk, str):
-                    obj = json.loads(jwk)
-                elif isinstance(jwk, dict):
-                    obj = jwk
-                else:
-                    raise ValueError
-            except ValueError:
-                raise InvalidKeyError("Key is not valid JSON") from None
+            obj = _parse_jwk(jwk)
 
             if obj.get("kty") != "OKP":
                 raise InvalidKeyError("Not an Octet Key Pair")
 
             curve = obj.get("crv")
-            if curve != "Ed25519" and curve != "Ed448":
+            if curve not in ("Ed25519", "Ed448"):
                 raise InvalidKeyError(f"Invalid curve: {curve}")
 
             if "x" not in obj:
                 raise InvalidKeyError('OKP should have "x" parameter')
-            x = base64url_decode(obj.get("x"))
 
+            return OKPAlgorithm._okp_build_key(obj, curve)
+
+        @staticmethod
+        def _okp_build_key(obj: JWKDict, curve: str) -> AllowedOKPKeys:
+            """Build the public or private OKP key from the JWK ``x`` (and optional ``d``) components."""
+            x = base64url_decode(obj.get("x"))
             try:
                 if "d" not in obj:
                     if curve == "Ed25519":
