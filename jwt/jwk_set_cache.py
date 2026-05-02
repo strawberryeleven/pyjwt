@@ -1,17 +1,29 @@
 import time
 from typing import Optional
 
-from .api_jwk import PyJWKSet, PyJWTSetWithTimestamp
+from .api_jwk import PyJWKSet
+
+
+class JWKSetWithTimestamp:
+    def __init__(self, jwk_set: PyJWKSet):
+        self.jwk_set = jwk_set
+        self.timestamp = time.monotonic()
+
+    def get_jwk_set(self) -> PyJWKSet:
+        return self.jwk_set
+
+    def get_timestamp(self) -> float:
+        return self.timestamp
 
 
 class JWKSetCache:
     def __init__(self, lifespan: float) -> None:
-        self.jwk_set_with_timestamp: Optional[PyJWTSetWithTimestamp] = None
+        self.jwk_set_with_timestamp: Optional[JWKSetWithTimestamp] = None
         self.lifespan = lifespan
 
     def put(self, jwk_set: PyJWKSet) -> None:
         if jwk_set is not None:
-            self.jwk_set_with_timestamp = PyJWTSetWithTimestamp(jwk_set)
+            self.jwk_set_with_timestamp = JWKSetWithTimestamp(jwk_set)
         else:
             # clear cache
             self.jwk_set_with_timestamp = None

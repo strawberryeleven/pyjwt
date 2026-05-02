@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -174,15 +173,3 @@ class PyJWKSet:
 
     def __iter__(self) -> Iterator[PyJWK]:
         return iter(self.keys)
-
-
-class PyJWTSetWithTimestamp:
-    def __init__(self, jwk_set: PyJWKSet):
-        self.jwk_set = jwk_set
-        self.timestamp = time.monotonic()
-
-    def get_jwk_set(self) -> PyJWKSet:
-        return self.jwk_set
-
-    def get_timestamp(self) -> float:
-        return self.timestamp
