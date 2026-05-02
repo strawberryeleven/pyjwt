@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
@@ -13,6 +14,71 @@ from .exceptions import (
     PyJWTError,
 )
 from .types import JWKDict
+
+
+class KeyTypeResolver(ABC):
+    """Strategy for deriving an algorithm name from a JWK's parameters.
+
+    Replaces the in-place ``if kty == ...`` switch that previously lived in
+    :class:`PyJWK`'s constructor. One concrete subclass exists per supported
+    key type (``EC``, ``RSA``, ``oct``, ``OKP``); the registry below maps a
+    ``kty`` value to its resolver instance.
+    """
+
+    @abstractmethod
+    def resolve(self, jwk_data: JWKDict) -> str:
+        """Return the algorithm name for the given JWK, or raise InvalidKeyError."""
+
+
+class _ECKeyTypeResolver(KeyTypeResolver):
+    _CURVE_TO_ALG = {
+        "P-256": "ES256",
+        "P-384": "ES384",
+        "P-521": "ES512",
+        "secp256k1": "ES256K",
+    }
+
+    def resolve(self, jwk_data: JWKDict) -> str:
+        crv = jwk_data.get("crv", None)
+        if not crv:
+            return "ES256"
+        try:
+            return self._CURVE_TO_ALG[crv]
+        except KeyError:
+            raise InvalidKeyError(f"Unsupported crv: {crv}") from None
+
+
+class _RSAKeyTypeResolver(KeyTypeResolver):
+    def resolve(self, jwk_data: JWKDict) -> str:
+        return "RS256"
+
+
+class _OctKeyTypeResolver(KeyTypeResolver):
+    def resolve(self, jwk_data: JWKDict) -> str:
+        return "HS256"
+
+
+class _OKPKeyTypeResolver(KeyTypeResolver):
+    _CURVE_TO_ALG = {
+        "Ed25519": "EdDSA",
+    }
+
+    def resolve(self, jwk_data: JWKDict) -> str:
+        crv = jwk_data.get("crv", None)
+        if not crv:
+            raise InvalidKeyError(f"crv is not found: {jwk_data}")
+        try:
+            return self._CURVE_TO_ALG[crv]
+        except KeyError:
+            raise InvalidKeyError(f"Unsupported crv: {crv}") from None
+
+
+_KEY_TYPE_RESOLVERS: dict[str, KeyTypeResolver] = {
+    "EC": _ECKeyTypeResolver(),
+    "RSA": _RSAKeyTypeResolver(),
+    "oct": _OctKeyTypeResolver(),
+    "OKP": _OKPKeyTypeResolver(),
+}
 
 
 class PyJWK:
@@ -37,32 +103,10 @@ class PyJWK:
             algorithm = self._jwk_data.get("alg", None)
 
         if not algorithm:
-            # Determine alg with kty (and crv).
-            crv = self._jwk_data.get("crv", None)
-            if kty == "EC":
-                if crv == "P-256" or not crv:
-                    algorithm = "ES256"
-                elif crv == "P-384":
-                    algorithm = "ES384"
-                elif crv == "P-521":
-                    algorithm = "ES512"
-                elif crv == "secp256k1":
-                    algorithm = "ES256K"
-                else:
-                    raise InvalidKeyError(f"Unsupported crv: {crv}")
-            elif kty == "RSA":
-                algorithm = "RS256"
-            elif kty == "oct":
-                algorithm = "HS256"
-            elif kty == "OKP":
-                if not crv:
-                    raise InvalidKeyError(f"crv is not found: {self._jwk_data}")
-                if crv == "Ed25519":
-                    algorithm = "EdDSA"
-                else:
-                    raise InvalidKeyError(f"Unsupported crv: {crv}")
-            else:
+            resolver = _KEY_TYPE_RESOLVERS.get(kty)
+            if resolver is None:
                 raise InvalidKeyError(f"Unsupported kty: {kty}")
+            algorithm = resolver.resolve(self._jwk_data)
 
         if not has_crypto and algorithm in requires_cryptography:
             raise MissingCryptographyError(
