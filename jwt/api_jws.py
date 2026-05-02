@@ -31,6 +31,60 @@ if TYPE_CHECKING:
 _ALGORITHM_UNSET = object()
 
 
+class AlgorithmRegistry:
+    """Mapping from algorithm name to :class:`Algorithm` instance.
+
+    Extracted from :class:`PyJWS` so the JWS class can focus on framing and
+    signature verification. ``PyJWS`` holds an ``AlgorithmRegistry`` as a
+    collaborator and delegates its registry-related public methods to it.
+    """
+
+    def __init__(self, algorithms: Sequence[str] | None = None) -> None:
+        self._algorithms = get_default_algorithms()
+        self._valid_algs = (
+            set(algorithms) if algorithms is not None else set(self._algorithms)
+        )
+
+        # Drop algorithms that are not on the whitelist.
+        for key in list(self._algorithms.keys()):
+            if key not in self._valid_algs:
+                del self._algorithms[key]
+
+    def register(self, alg_id: str, alg_obj: Algorithm) -> None:
+        """Add a new :class:`Algorithm` to the registry."""
+        if alg_id in self._algorithms:
+            raise ValueError("Algorithm already has a handler.")
+        if not isinstance(alg_obj, Algorithm):
+            raise TypeError("Object is not of type `Algorithm`")
+        self._algorithms[alg_id] = alg_obj
+        self._valid_algs.add(alg_id)
+
+    def unregister(self, alg_id: str) -> None:
+        """Remove an :class:`Algorithm` from the registry."""
+        if alg_id not in self._algorithms:
+            raise KeyError(
+                "The specified algorithm could not be removed"
+                " because it is not registered."
+            )
+        del self._algorithms[alg_id]
+        self._valid_algs.remove(alg_id)
+
+    def names(self) -> list[str]:
+        """Return the list of supported algorithm names."""
+        return list(self._valid_algs)
+
+    def get(self, alg_name: str) -> Algorithm:
+        """Return the :class:`Algorithm` instance registered under ``alg_name``."""
+        try:
+            return self._algorithms[alg_name]
+        except KeyError as e:
+            if not has_crypto and alg_name in requires_cryptography:
+                raise NotImplementedError(
+                    f"Algorithm '{alg_name}' could not be found. Do you have cryptography installed?"
+                ) from e
+            raise NotImplementedError("Algorithm not supported") from e
+
+
 class PyJWS:
     header_typ = "JWT"
 
@@ -39,15 +93,7 @@ class PyJWS:
         algorithms: Sequence[str] | None = None,
         options: SigOptions | None = None,
     ) -> None:
-        self._algorithms = get_default_algorithms()
-        self._valid_algs = (
-            set(algorithms) if algorithms is not None else set(self._algorithms)
-        )
-
-        # Remove algorithms that aren't on the whitelist
-        for key in list(self._algorithms.keys()):
-            if key not in self._valid_algs:
-                del self._algorithms[key]
+        self._registry = AlgorithmRegistry(algorithms)
 
         self.options: SigOptions = self._get_default_options()
         if options is not None:
@@ -58,65 +104,20 @@ class PyJWS:
         return {"verify_signature": True, "enforce_minimum_key_length": False}
 
     def register_algorithm(self, alg_id: str, alg_obj: Algorithm) -> None:
-        """
-        Registers a new Algorithm for use when creating and verifying tokens.
-
-        :param str alg_id: the ID of the Algorithm
-        :param alg_obj: the Algorithm object
-        :type alg_obj: Algorithm
-        """
-        if alg_id in self._algorithms:
-            raise ValueError("Algorithm already has a handler.")
-
-        if not isinstance(alg_obj, Algorithm):
-            raise TypeError("Object is not of type `Algorithm`")
-
-        self._algorithms[alg_id] = alg_obj
-        self._valid_algs.add(alg_id)
+        """Register an :class:`Algorithm` for use when creating and verifying tokens."""
+        self._registry.register(alg_id, alg_obj)
 
     def unregister_algorithm(self, alg_id: str) -> None:
-        """
-        Unregisters an Algorithm for use when creating and verifying tokens
-        :param str alg_id: the ID of the Algorithm
-        :raises KeyError: if algorithm is not registered.
-        """
-        if alg_id not in self._algorithms:
-            raise KeyError(
-                "The specified algorithm could not be removed"
-                " because it is not registered."
-            )
-
-        del self._algorithms[alg_id]
-        self._valid_algs.remove(alg_id)
+        """Unregister an :class:`Algorithm`. Raises ``KeyError`` if not registered."""
+        self._registry.unregister(alg_id)
 
     def get_algorithms(self) -> list[str]:
-        """
-        Returns a list of supported values for the `alg` parameter.
-
-        :rtype: list[str]
-        """
-        return list(self._valid_algs)
+        """Return the list of supported values for the ``alg`` parameter."""
+        return self._registry.names()
 
     def get_algorithm_by_name(self, alg_name: str) -> Algorithm:
-        """
-        For a given string name, return the matching Algorithm object.
-
-        Example usage:
-        >>> jws_obj = PyJWS()
-        >>> jws_obj.get_algorithm_by_name("RS256")
-
-        :param alg_name: The name of the algorithm to retrieve
-        :type alg_name: str
-        :rtype: Algorithm
-        """
-        try:
-            return self._algorithms[alg_name]
-        except KeyError as e:
-            if not has_crypto and alg_name in requires_cryptography:
-                raise NotImplementedError(
-                    f"Algorithm '{alg_name}' could not be found. Do you have cryptography installed?"
-                ) from e
-            raise NotImplementedError("Algorithm not supported") from e
+        """Return the matching :class:`Algorithm` for the given ``alg`` name."""
+        return self._registry.get(alg_name)
 
     def encode(
         self,
