@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Container, Iterable
 from dataclasses import dataclass
-from typing import Any
+from datetime import timedelta
+from typing import Any, Union
 
 from .warnings import RemovedInPyjwt3Warning
 
@@ -37,3 +39,18 @@ class DecodedToken:
     signing_input: bytes
     header: dict[str, Any]
     signature: bytes
+
+
+@dataclass(frozen=True)
+class ClaimContext:
+    """Bundle of optional claim-validation parameters.
+
+    Replaces the loose ``audience`` / ``issuer`` / ``subject`` / ``leeway``
+    parameter group that used to be threaded through ``PyJWT.decode``,
+    ``PyJWT.decode_complete`` and ``PyJWT._validate_claims``.
+    """
+
+    audience: Union[str, Iterable[str], None] = None
+    issuer: Union[Container[str], str, None] = None
+    subject: Union[str, None] = None
+    leeway: Union[float, timedelta] = 0

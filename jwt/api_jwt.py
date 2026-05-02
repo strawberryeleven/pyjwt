@@ -8,7 +8,7 @@ from collections.abc import Container, Iterable, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Union, cast
 
-from ._internal import warn_deprecated_kwargs
+from ._internal import ClaimContext, warn_deprecated_kwargs
 from .api_jws import PyJWS, _ALGORITHM_UNSET, _jws_global_obj
 from .exceptions import (
     DecodeError,
@@ -262,14 +262,13 @@ class PyJWT:
 
         payload = self._decode_payload(decoded)
 
-        self._validate_claims(
-            payload,
-            merged_options,
+        claim_context = ClaimContext(
             audience=audience,
             issuer=issuer,
-            leeway=leeway,
             subject=subject,
+            leeway=leeway,
         )
+        self._validate_claims(payload, merged_options, claim_context)
 
         decoded["payload"] = payload
         return decoded
@@ -366,15 +365,13 @@ class PyJWT:
         self,
         payload: dict[str, Any],
         options: FullOptions,
-        audience: Iterable[str] | str | None = None,
-        issuer: Container[str] | str | None = None,
-        subject: str | None = None,
-        leeway: float | timedelta = 0,
+        ctx: ClaimContext,
     ) -> None:
+        leeway = ctx.leeway
         if isinstance(leeway, timedelta):
             leeway = leeway.total_seconds()
 
-        if audience is not None and not isinstance(audience, (str, Iterable)):
+        if ctx.audience is not None and not isinstance(ctx.audience, (str, Iterable)):
             raise TypeError("audience must be a string, iterable or None")
 
         self._validate_required_claims(payload, options["require"])
@@ -391,15 +388,15 @@ class PyJWT:
             self._validate_exp(payload, now, leeway)
 
         if options["verify_iss"]:
-            self._validate_iss(payload, issuer)
+            self._validate_iss(payload, ctx.issuer)
 
         if options["verify_aud"]:
             self._validate_aud(
-                payload, audience, strict=options.get("strict_aud", False)
+                payload, ctx.audience, strict=options.get("strict_aud", False)
             )
 
         if options["verify_sub"]:
-            self._validate_sub(payload, subject)
+            self._validate_sub(payload, ctx.subject)
 
         if options["verify_jti"]:
             self._validate_jti(payload)
